@@ -1,0 +1,172 @@
+name: build-easepi-r1
+
+# 手动触发（可选项见 Actions 页面），或每周五 18:00 UTC 自动跟版构建
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "内核分支  current=6.18 / edge=7.3"
+        type: choice
+        options: [current, edge]
+        default: current
+      release:
+        description: "发行版"
+        type: choice
+        options: [trixie, bookworm, noble]
+        default: trixie
+      variant:
+        description: "镜像类型"
+        type: choice
+        options: [server, minimal, desktop]
+        default: server
+      dts:
+        description: "dts 版本  mainline=主线 / legacy=旧镜像那份(含风扇音频)"
+        type: choice
+        options: [mainline, legacy]
+        default: mainline
+      armbian_ref:
+        description: "armbian/build 的 git ref（留空 = main）"
+        type: string
+        default: main
+  schedule:
+    - cron: "0 18 * * 5"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.event.inputs.branch || 'current' }}-${{ github.event.inputs.variant || 'server' }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 355
+    env:
+      BRANCH: ${{ github.event.inputs.branch || 'current' }}
+      RELEASE: ${{ github.event.inputs.release || 'trixie' }}
+      VARIANT: ${{ github.event.inputs.variant || 'server' }}
+      DTS: ${{ github.event.inputs.dts || 'mainline' }}
+      ARMB_REF: ${{ github.event.inputs.armbian_ref || 'main' }}
+      ARMB_DIR: ${{ github.workspace }}/.armbian-build
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
+      - name: Disk before build
+        run: df -h /
+
+      - name: Fetch armbian/build
+        run: |
+          set -euo pipefail
+          mkdir -p "$ARMB_DIR"
+          cd "$ARMB_DIR"
+          git init -q
+          git remote add origin https://github.com/armbian/build.git
+          git fetch --depth 1 origin "$ARMB_REF"
+          git checkout -q FETCH_HEAD
+          echo "armbian/build @ $(git rev-parse --short HEAD) ($(git log -1 --format=%s))"
+
+      - name: Apply EasePi R1 board support
+        run: |
+          chmod +x scripts/apply.sh
+          ./scripts/apply.sh "$ARMB_DIR" --branch="$BRANCH" --dts="$DTS"
+
+      - name: Show injected files
+        run: |
+          set -euo pipefail
+          cd "$ARMB_DIR"
+          git status --short
+          echo "--- dts 位置 ---"
+          ls -l patch/kernel/archive/rockchip64-*/dt/rk3568-easepi-r1.dts 2>/dev/null || echo "(内核自带，无补丁)"
+
+      - name: Restore build cache
+        uses: actions/cache@v4
+        continue-on-error: true
+        with:
+          path: ${{ env.ARMB_DIR }}/output/cache
+          key: armbian-cache-${{ env.BRANCH }}-${{ github.run_id }}
+          restore-keys: |
+            armbian-cache-${{ env.BRANCH }}-
+
+      - name: Build image
+        working-directory: ${{ env.ARMB_DIR }}
+        run: |
+          set -euo pipefail
+          case "$VARIANT" in
+            server)  MIN=no;  DESK=no  ;;
+            minimal) MIN=yes; DESK=no  ;;
+            desktop) MIN=no;  DESK=yes ;;
+          esac
+          echo ">>> BOARD=easepi-r1 BRANCH=$BRANCH RELEASE=$RELEASE MINIMAL=$MIN DESKTOP=$DESK DTS=$DTS"
+          ./compile.sh docker \
+            BOARD=easepi-r1 \
+            BRANCH="$BRANCH" \
+            RELEASE="$RELEASE" \
+            BUILD_MINIMAL="$MIN" \
+            BUILD_DESKTOP="$DESK" \
+            KERNEL_CONFIGURE=no \
+            COMPRESS_OUTPUTIMAGE=sha,xz \
+            EXPERT=yes
+
+      - name: List images
+        if: always()
+        run: |
+          set -euo pipefail
+          cd "$ARMB_DIR"
+          ls -la output/images/ 2>/dev/null || echo "no output/images"
+          if ls output/images/*.img.xz >/dev/null 2>&1; then
+            {
+              echo "## EasePi-R1 构建产物"
+              echo ""
+              echo "| 项目 | 值 |"
+              echo "|---|---|"
+              echo "| BOARD | easepi-r1 |"
+              echo "| BRANCH | $BRANCH |"
+              echo "| RELEASE | $RELEASE |"
+              echo "| VARIANT | $VARIANT |"
+              echo "| DTS | $DTS |"
+              echo "| armbian/build | $(git rev-parse --short HEAD) |"
+              echo ""
+              echo "### 文件"
+              echo '```'
+              ls -l output/images/*.img.xz output/images/*.sha 2>/dev/null || true
+              echo '```'
+              echo "### sha256"
+              echo '```'
+              cat output/images/*.sha 2>/dev/null || true
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload image
+        uses: actions/upload-artifact@v4
+        with:
+          name: easepi-r1-${{ env.BRANCH }}-${{ env.RELEASE }}-${{ env.VARIANT }}-${{ env.DTS }}
+          path: |
+            ${{ env.ARMB_DIR }}/output/images/*.img.xz
+            ${{ env.ARMB_DIR }}/output/images/*.sha
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-${{ github.run_id }}
+          path: ${{ env.ARMB_DIR }}/output/logs/
+          if-no-files-found: ignore
+          retention-days: 7
