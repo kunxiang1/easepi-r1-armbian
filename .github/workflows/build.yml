@@ -65,6 +65,22 @@ jobs:
           docker-images: true
           swap-storage: true
 
+      # 交叉架构构建（amd64 主机编 arm64）必须能在容器里 exec arm64 二进制。
+      # GitHub 托管 runner 默认没有注册 qemu binfmt，armbian 在容器内 `update-binfmts --enable`
+      # 写不进去（/proc/sys/fs/binfmt_misc 只读），随后 `arch-test arm64` 失败：
+      #   "arm64: not supported on this machine/kernel" → Error 1 at qemu-static.sh:129
+      # 用官方 action 在**宿主机内核**上注册（带 F 标志，容器内也生效）。
+      - name: QEMU binfmt (arm64 交叉构建)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: all
+
+      - name: Verify qemu binfmt
+        run: |
+          set -euo pipefail
+          ls /proc/sys/fs/binfmt_misc/ || true
+          docker run --rm --platform linux/arm64 alpine:latest uname -m
+
       - name: Disk before build
         run: df -h /
 
