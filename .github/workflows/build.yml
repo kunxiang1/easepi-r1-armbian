@@ -111,7 +111,11 @@ jobs:
             desktop) MIN=no;  DESK=yes ;;
           esac
           echo ">>> BOARD=easepi-r1 BRANCH=$BRANCH RELEASE=$RELEASE MINIMAL=$MIN DESKTOP=$DESK DTS=$DTS"
-          ./compile.sh docker \
+          # 注意：这里不能写 `compile.sh docker ...`。
+          # armbian-next 在非 root 用户下检测到 docker 可用时会自己把命令改成 docker 再重启进容器；
+          # 显式传 docker 会让容器内的重启命令仍是 docker，触发
+          # "asking for docker... inside docker" 直接退出 43。
+          ./compile.sh \
             BOARD=easepi-r1 \
             BRANCH="$BRANCH" \
             RELEASE="$RELEASE" \

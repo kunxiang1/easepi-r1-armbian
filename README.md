@@ -48,11 +48,13 @@ Actions 页面 → `build-easepi-r1` → **Run workflow**，可选项：
 git clone --depth 1 https://github.com/armbian/build.git
 ./scripts/apply.sh ./build --branch=current --dts=mainline
 cd build
-./compile.sh docker BOARD=easepi-r1 BRANCH=current RELEASE=trixie \
+./compile.sh BOARD=easepi-r1 BRANCH=current RELEASE=trixie \
     BUILD_MINIMAL=no BUILD_DESKTOP=no KERNEL_CONFIGURE=no COMPRESS_OUTPUTIMAGE=sha,xz
 ```
 
-> 需 ~50GB 空闲。宿主机不是 Debian 13/Trixie 时走 `docker` 模式最稳。
+> 需 ~50GB 空闲。宿主机不是 Debian 13/Trixie 时最稳，`compile.sh` 在非 root 用户下
+> 检测到 docker 会**自己**进容器构建，不要再手写 `docker` 子命令——
+> 显式写会让容器里再解析一次 `docker`，报 `asking for docker... inside docker`（exit 43）。
 
 ## 两种 dts 的差别
 
