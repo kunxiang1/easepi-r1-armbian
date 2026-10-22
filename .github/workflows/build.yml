@@ -32,7 +32,7 @@ on:
     - cron: "0 18 * * 5"
 
 permissions:
-  contents: read
+  contents: write   # 发布 Release / 建 tag 需要写权限（之前是 read，所以只出了 artifact，没进 Releases）
 
 concurrency:
   group: build-${{ github.event.inputs.branch || 'current' }}-${{ github.event.inputs.variant || 'server' }}
@@ -181,6 +181,49 @@ jobs:
           if-no-files-found: error
           retention-days: 30
           compression-level: 0
+
+      # ── 发布到 Releases ────────────────────────────────────────────────
+      # 以前只有 upload-artifact，产物躺在 Actions 的 artifact 里（要登录才能下、30 天过期），
+      # Releases 页面永远是空的。这里补上真正的发布步骤：打 tag、建 Release、上传 img.xz + sha。
+      - name: Stamp release tag
+        id: stamp
+        run: |
+          set -euo pipefail
+          DATE=$(TZ=Asia/Shanghai date +%Y%m%d)
+          TAG="easepi-r1-${RELEASE}-${VARIANT}-${BRANCH}-${DATE}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "date=$DATE" >> "$GITHUB_OUTPUT"
+          echo "本次 Release tag: $TAG"
+
+      - name: Publish to Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.stamp.outputs.tag }}
+          name: EasePi-R1 ${{ env.RELEASE }} ${{ env.VARIANT }} (${{ env.BRANCH }}, ${{ steps.stamp.outputs.date }})
+          # 同一天重复构建（换 dts / 追上游）时覆盖同名资产，而不是报 422 失败
+          overwrite_files: true
+          fail_on_unmatched_files: true
+          prerelease: false
+          body: |
+            EasePi R1（RK3568）Armbian 镜像 — 自动构建
+
+            | 项目 | 值 |
+            |---|---|
+            | 板型 | easepi-r1 (RK3568) |
+            | 发行版 | ${{ env.RELEASE }} |
+            | 镜像类型 | ${{ env.VARIANT }} |
+            | 内核分支 | `${{ env.BRANCH }}` |
+            | dts | ${{ env.DTS }} |
+            | armbian/build | `${{ env.ARMB_REF }}` |
+            | 构建运行 | [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) |
+
+            **烧写**：解压后用 BalenaEtcher / Rufus 写入 SD 卡或 eMMC，或
+            `xz -dc *.img.xz | sudo dd of=/dev/sdX bs=4M status=progress conv=fsync`
+
+            默认账号 `root` / `1234`（首次登录强制改密），校验见同目录 `*.sha`。
+          files: |
+            ${{ env.ARMB_DIR }}/output/images/*.img.xz
+            ${{ env.ARMB_DIR }}/output/images/*.sha
 
       - name: Upload logs on failure
         if: failure()
