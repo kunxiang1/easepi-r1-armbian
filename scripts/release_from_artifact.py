@@ -83,27 +83,37 @@ def pick_run(repo: str, token: str, run_id: str | None) -> dict:
 
 
 def download_artifact(repo: str, token: str, artifact: dict, dest: Path) -> Path:
+    """下载 artifact。
+
+    注意：/actions/artifacts/{id}/zip 会 302 到 Azure blob（不同主机），而 urllib 会把
+    Authorization 头一起带过去，blob 直接 401（Server failed to authenticate）。
+    curl 默认只在同主机重定向时保留头，所以这里用 curl 流式下载并轮询进度。
+    """
     size_mb = artifact["size_in_bytes"] / 1048576
     zip_path = dest / (artifact["name"] + ".zip")
     url = f"{API}/repos/{repo}/actions/artifacts/{artifact['id']}/zip"
     log(f"  下载 artifact {artifact['name']} ({size_mb:.1f} MB) …")
     t0 = time.time()
-    req = _req(url, token)
-    with urllib.request.urlopen(req, timeout=TIMEOUT) as r, open(zip_path, "wb") as f:
-        total = int(r.headers.get("Content-Length") or 0)
-        got = 0
-        last = 0.0
-        while True:
-            buf = r.read(CHUNK)
-            if not buf:
-                break
-            f.write(buf)
-            got += len(buf)
-            now = time.time()
-            if now - last > 5:
-                last = now
-                pct = f"{got * 100 / total:.0f}%" if total else "?"
-                log(f"    {got / 1048576:.0f} MB ({pct}) {got / 1048576 / max(now - t0, 1e-9):.1f} MB/s")
+    curl = shutil.which("curl")
+    if not curl:
+        raise SystemExit("需要 curl 下载 artifact")
+    cmd = [curl, "-sS", "--fail-with-body", "-L", "--retry", "3", "--retry-delay", "3",
+           "-H", f"Authorization: Bearer {token}",
+           "-H", "Accept: application/vnd.github+json",
+           "-H", "X-GitHub-Api-Version: 2022-11-28",
+           "-o", str(zip_path), url]
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    last = 0.0
+    while proc.poll() is None:
+        now = time.time()
+        if now - last > 10:
+            last = now
+            got = zip_path.stat().st_size / 1048576 if zip_path.exists() else 0
+            log(f"    {got:.0f}/{size_mb:.0f} MB  {got / max(now - t0, 1e-9):.1f} MB/s")
+        time.sleep(2)
+    out, err = proc.communicate()
+    if proc.returncode != 0:
+        raise SystemExit(f"curl 下载失败 ({proc.returncode}): {err[:500]}")
     log(f"  下载完成 {zip_path.name} {zip_path.stat().st_size / 1048576:.1f} MB，{time.time() - t0:.0f}s")
     return zip_path
 
