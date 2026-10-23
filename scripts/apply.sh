@@ -43,6 +43,18 @@ esac
 # ---- 1) 板级配置 ----
 BOARD_DST="$TARGET/config/boards/easepi-r1.conf"
 cp -f "$HERE/config/boards/easepi-r1.conf" "$BOARD_DST"
+
+# Windows 上写出来的文件常带 CRLF。armbian 是 `source` 板级配置的，CRLF 会变成
+# `$'\r': command not found` → 构建直接 Error 127 退出；更阴的是赋值行不报错，
+# 变量值尾部悄悄带上 \r（BOOTCONFIG 找不到 defconfig 之类）。所以这里兜底换成 LF。
+normalize_lf() {
+	local f="$1"
+	if grep -q $'\r' "$f" 2> /dev/null; then
+		sed -i 's/\r$//' "$f"
+		say "警告: $(basename "$f") 是 CRLF，已转成 LF —— 请修源文件，别依赖这里兜底"
+	fi
+}
+normalize_lf "$BOARD_DST"
 say "已写入 config/boards/easepi-r1.conf"
 
 # ---- 2) 查这个分支用的内核版本 ----
@@ -77,6 +89,7 @@ if [[ "$need_dts" == "1" ]]; then
 	fi
 	[[ -f "$SRC_DTS" ]] || die "找不到 dts 源文件 $SRC_DTS"
 	cp -f "$SRC_DTS" "$DT_DIR/rk3568-easepi-r1.dts"
+	normalize_lf "$DT_DIR/rk3568-easepi-r1.dts"
 	say "已写入 patch/kernel/archive/rockchip64-$KVER/dt/rk3568-easepi-r1.dts  ($DTS_KIND)"
 else
 	say "内核 $KVER 已自带 rk3568-easepi-r1.dts，跳过 dts 补丁"
