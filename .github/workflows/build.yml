@@ -49,6 +49,8 @@ jobs:
       DTS: ${{ github.event.inputs.dts || 'mainline' }}
       ARMB_REF: ${{ github.event.inputs.armbian_ref || 'main' }}
       ARMB_DIR: ${{ github.workspace }}/.armbian-build
+      # 固定 tag：只保留最新一份，不再按日期堆历史版本
+      TAG: easepi-r1-latest
 
     steps:
       - name: Checkout
@@ -171,41 +173,35 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      - name: Upload image
-        uses: actions/upload-artifact@v4
-        with:
-          name: easepi-r1-${{ env.BRANCH }}-${{ env.RELEASE }}-${{ env.VARIANT }}-${{ env.DTS }}
-          path: |
-            ${{ env.ARMB_DIR }}/output/images/*.img.xz
-            ${{ env.ARMB_DIR }}/output/images/*.sha
-          if-no-files-found: error
-          retention-days: 30
-          compression-level: 0
-
       # ── 发布到 Releases ────────────────────────────────────────────────
-      # 以前只有 upload-artifact，产物躺在 Actions 的 artifact 里（要登录才能下、30 天过期），
-      # Releases 页面永远是空的。这里补上真正的发布步骤：打 tag、建 Release、上传 img.xz + sha。
-      - name: Stamp release tag
+      # 固定一个 tag（easepi-r1-latest）+ 一个 Release：每次构建直接覆盖，
+      # 仓库里永远只有最新一份，不堆历史 tag / 历史资产。
+      - name: Stamp build time
         id: stamp
+        run: echo "date=$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M')" >> "$GITHUB_OUTPUT"
+
+      - name: Purge previous build
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          set -euo pipefail
-          DATE=$(TZ=Asia/Shanghai date +%Y%m%d)
-          TAG="easepi-r1-${RELEASE}-${VARIANT}-${BRANCH}-${DATE}"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "date=$DATE" >> "$GITHUB_OUTPUT"
-          echo "本次 Release tag: $TAG"
+          set -uo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            for a in $(gh release view "$TAG" --json assets -q '.assets[].name'); do
+              echo "删除旧资产: $a"
+              gh release delete-asset "$TAG" "$a" -y
+            done
+          fi
 
       - name: Publish to Releases
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.stamp.outputs.tag }}
-          name: EasePi-R1 ${{ env.RELEASE }} ${{ env.VARIANT }} (${{ env.BRANCH }}, ${{ steps.stamp.outputs.date }})
-          # 同一天重复构建（换 dts / 追上游）时覆盖同名资产，而不是报 422 失败
+          tag_name: ${{ env.TAG }}
+          name: EasePi-R1 最新构建 — ${{ env.RELEASE }} ${{ env.VARIANT }} (${{ env.BRANCH }}, ${{ steps.stamp.outputs.date }})
           overwrite_files: true
           fail_on_unmatched_files: true
           prerelease: false
           body: |
-            EasePi R1（RK3568）Armbian 镜像 — 自动构建
+            EasePi R1（RK3568）Armbian 镜像 — 最新一份（每次构建覆盖本 Release）
 
             | 项目 | 值 |
             |---|---|
@@ -215,6 +211,7 @@ jobs:
             | 内核分支 | `${{ env.BRANCH }}` |
             | dts | ${{ env.DTS }} |
             | armbian/build | `${{ env.ARMB_REF }}` |
+            | 构建时间 | ${{ steps.stamp.outputs.date }} (UTC+8) |
             | 构建运行 | [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) |
 
             **烧写**：解压后用 BalenaEtcher / Rufus 写入 SD 卡或 eMMC，或

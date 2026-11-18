@@ -37,7 +37,8 @@ Actions 页面 → `build-easepi-r1` → **Run workflow**，可选项：
 另外每周五 18:00 UTC 自动跑一次，跟着上游滚版本。
 
 构建完成后：
-- 运行页面底部 **Artifacts** 下载 `easepi-r1-*.img.xz`（约 450MB）
+- 到 **[Releases](https://github.com/kunxiang1/easepi-r1-armbian/releases/tag/easepi-r1-latest)** 下载 `*.img.xz`（约 450MB）
+- Releases 只有一个固定 tag `easepi-r1-latest`，每次构建**覆盖**上一份；历史镜像不留、Actions 里也不传 artifact
 - Job Summary 里有 sha256
 
 首次构建约 2–4 小时（GitHub 托管 4 核），后续命中缓存会快一些。
