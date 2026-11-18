@@ -180,18 +180,6 @@ jobs:
         id: stamp
         run: echo "date=$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M')" >> "$GITHUB_OUTPUT"
 
-      - name: Purge previous build
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -uo pipefail
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            for a in $(gh release view "$TAG" --json assets -q '.assets[].name'); do
-              echo "删除旧资产: $a"
-              gh release delete-asset "$TAG" "$a" -y
-            done
-          fi
-
       - name: Publish to Releases
         uses: softprops/action-gh-release@v2
         with:
@@ -221,6 +209,19 @@ jobs:
           files: |
             ${{ env.ARMB_DIR }}/output/images/*.img.xz
             ${{ env.ARMB_DIR }}/output/images/*.sha
+
+      - name: Purge stale assets（只留本次构建那几张）
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          cd "$ARMB_DIR/output/images"
+          ls *.img.xz *.sha > "$RUNNER_TEMP/keep.txt"
+          for a in $(gh release view "$TAG" --json assets -q '.assets[].name'); do
+            grep -qxF "$a" "$RUNNER_TEMP/keep.txt" && continue
+            echo "删除旧资产: $a"
+            gh release delete-asset "$TAG" "$a" -y
+          done
 
       - name: Upload logs on failure
         if: failure()
